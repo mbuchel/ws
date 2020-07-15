@@ -1,5 +1,10 @@
-import asyncdispatch, asynchttpserver, asyncnet, base64, httpclient, httpcore,
-    nativesockets, net, random, std/sha1, streams, strformat, strutils, uri
+import asyncdispatch, asynchttpserver, asyncnet, base64, httpclient,
+       httpcore, nativesockets, net, random, std/sha1, streams, strformat,
+       strutils, uri, sequtils
+import ws/extensions
+
+# Reexports the extensions module
+export extensions
 
 type
   ReadyState* = enum
@@ -15,6 +20,7 @@ type
     protocol*: string
     readyState*: ReadyState
     masked*: bool # send masked packets
+    extensions: Extensions
 
   WebSocketError* = object of IOError
 
@@ -99,13 +105,16 @@ proc newWebSocket*(req: Request): Future[WebSocket] {.async.} =
       "Failed to create WebSocket from request: " & getCurrentExceptionMsg()
     )
 
-proc newWebSocket*(url: string, protocol: string = ""): Future[WebSocket] {.async.} =
+proc newWebSocket*(url: string, protocol: string = "",
+                   extensions: Extensions = @[]):
+                    Future[WebSocket] {.async.} =
   ## Creates a new WebSocket connection,
   ## protocol is optional, "" means no protocol.
   var ws = WebSocket()
   ws.masked = true
   ws.tcpSocket = newAsyncSocket()
   ws.protocol = protocol
+  ws.extensions = extensions
 
   var uri = parseUri(url)
   var port = Port(9001)
@@ -130,13 +139,25 @@ proc newWebSocket*(url: string, protocol: string = ""): Future[WebSocket] {.asyn
     secStr[i] = char rand(255)
   let secKey = base64.encode(secStr)
 
-  client.headers = newHttpHeaders({
-    "Connection": "Upgrade",
-    "Upgrade": "websocket",
-    "Sec-WebSocket-Version": "13",
-    "Sec-WebSocket-Key": secKey,
-    "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
-  })
+  let
+    extensionHeader = join(map(extensions, createHeader), "; ")
+
+  if extensionHeader != "":
+    client.headers = newHttpHeaders({
+      "Connection": "Upgrade",
+      "Upgrade": "websocket",
+      "Sec-WebSocket-Version": "13",
+      "Sec-WebSocket-Key": secKey,
+      "Sec-WebSocket-Extensions": extensionHeader
+    })
+  else:
+    client.headers = newHttpHeaders({
+      "Connection": "Upgrade",
+      "Upgrade": "websocket",
+      "Sec-WebSocket-Version": "13",
+      "Sec-WebSocket-Key": secKey
+    })
+
   if ws.protocol != "":
     client.headers["Sec-WebSocket-Protocol"] = ws.protocol
   var res = await client.get($uri)
@@ -183,7 +204,7 @@ type
   ]#
   Frame = tuple
     fin: bool ## Indicates that this is the final fragment in a message.
-    rsv1: bool ## MUST be 0 unless negotiated that defines meanings
+    rsv1: bool ## Is true when compression has been negotiated
     rsv2: bool ## MUST be 0
     rsv3: bool ## MUST be 0
     opcode: Opcode ## Defines the interpretation of the "Payload data".
@@ -254,14 +275,22 @@ proc send*(
 ): Future[void] {.async.} =
   ## This is the main method used to send data via this WebSocket.
   try:
+    var
+      compression: bool = false
+      encodedData = text
+    for i in ws.extensions:
+      case i.ext:
+        of wsePermessageDeflate:
+          compression = true
+          encodedData = permessageDeflateCompress(text, i)
     var frame = encodeFrame((
       fin: true,
-      rsv1: false,
+      rsv1: compression,
       rsv2: false,
       rsv3: false,
       opcode: opcode,
       mask: ws.masked,
-      data: text
+      data: encodedData
     ))
     const maxSize = 1024*1024
     # Send stuff in 1 megabyte chunks to prevent IOErrors.
@@ -289,6 +318,7 @@ proc recvFrame(ws: WebSocket): Future[Frame] {.async.} =
 
   # Grab the header.
   let header = await ws.tcpSocket.recv(2)
+  echo header.len
 
   if header.len != 2:
     ws.readyState = Closed
@@ -305,7 +335,7 @@ proc recvFrame(ws: WebSocket): Future[Frame] {.async.} =
   result.opcode = (b0 and 0x0f).Opcode
 
   # If any of the rsv are set close the socket.
-  if result.rsv1 or result.rsv2 or result.rsv3:
+  if result.rsv2 or result.rsv3:
     ws.readyState = Closed
     raise newException(WebSocketError, "WebSocket Protocol mismatch")
 
