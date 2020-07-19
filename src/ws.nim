@@ -318,7 +318,6 @@ proc recvFrame(ws: WebSocket): Future[Frame] {.async.} =
 
   # Grab the header.
   let header = await ws.tcpSocket.recv(2)
-  echo header.len
 
   if header.len != 2:
     ws.readyState = Closed

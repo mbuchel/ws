@@ -1,4 +1,10 @@
-import miniz
+#
+# Author: Michael Buchel
+# Reason: This code is designed to provide an easy to use extension list
+#         it will grow with RFCs.
+#
+#import deflate/[compression, decompression]
+import zip/zlib
 import sugar
 
 type
@@ -56,18 +62,9 @@ proc createHeader*(e: Extension): string =
 
 # May move this into another file later
 proc permessageDeflateCompress*(text: string, e: Extension): string =
-  let compressText: (int) -> string = (x: int) => compress(
-    text, level = x
-  )
-  case e.level:
-    of pdlZNoCompression:
-      result = compressText(Z_NO_COMPRESSION)
-    of pdlZBestSpeed:
-      result = compressText(Z_BEST_SPEED)
-    of pdlZBestCompression:
-      result = compressText(Z_BEST_COMPRESSION)
-    of pdlZDefaultCompression:
-      result = compressText(Z_DEFAULT_COMPRESSION)
+  result = text
+  #discard deflate(result, stream = RAW_DEFLATE)
 
 proc permessageDeflateDecompress*(text: string): string =
-  uncompress(text)
+  result = text
+  #discard inflate(result)

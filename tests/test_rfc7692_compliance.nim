@@ -1,6 +1,5 @@
-import asyncdispatch, ws, zip/zlib
-
-echo uncompress(compress("hello", stream=RAW_DEFLATE), stream=RAW_DEFLATE)
+import asyncdispatch, ws
+import sequtils, sugar
 
 proc main() {.async.} =
   let e = pndExt(
@@ -9,13 +8,13 @@ proc main() {.async.} =
     strategy = pdsZDefaultStrategy
   )
   echo e
-  var ws = await newWebSocket("ws://127.0.0.1:9000", extensions = @[e])
+  var ws = await newWebSocket("ws://127.0.0.1:9000", extensions = @[])
   await ws.send("Hi, how are you?")
-  let response = await ws.receiveStrPacket()
-  echo uncompress(response, stream=RAW_DEFLATE)
+  var response = await ws.receiveStrPacket()
+  let data = @response
+  echo response
+  echo map(data, (x: char) => ord(x))
   ws.close()
-
-waitFor main()
 
 try:
   waitFor main()
